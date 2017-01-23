@@ -9,6 +9,7 @@ import (
 	"image/png"  // register the PNG format with the image package
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 const (
@@ -72,6 +73,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	fmt.Printf("Reading to %s\n", ArgsIn.file)
 	// decode our image
 	img, _, err := image.Decode(infile)
 	if err != nil {
@@ -106,6 +108,7 @@ func main() {
 	// TODO
 
 	// output the image
+	fmt.Printf("Writing to %s\n", ArgsIn.outfile)
 	outfile, err := os.Create(ArgsIn.outfile)
 	if err != nil {
 		fmt.Printf("Could not create file %s\n", ArgsIn.outfile)
@@ -122,47 +125,52 @@ func main() {
 }
 
 func PixelSort(img *image.RGBA, delta int, reverse bool) (image.Image, error) {
+	var wg sync.WaitGroup
 	// iterate across the image
 	bounds := img.Bounds()
 
+	fmt.Printf("Processing %d rows...", bounds.Max.Y-bounds.Min.Y)
+
 	for row := bounds.Min.Y; row < bounds.Max.Y; row++ {
-		fmt.Printf("row %d / %d\n", row, bounds.Max.Y-bounds.Min.Y)
 		yi := img.Stride * row
 		// find areas to sort, within delta
 
-		var back, front int
-		back = bounds.Min.X
-		for front = back + 1; front < bounds.Max.X; front++ {
-			// go until we detect an edge, then sort the area
-			i2 := yi + (front * 4)
-			i1 := i2 - 4
-			p1 := img.Pix[i1 : i1+3]
-			p2 := img.Pix[i2 : i2+3]
-			// check against delta
-			pd := colorDist2(p1, p2)
-			if uint32(delta) > pd {
-				continue
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var back, front int
+			back = bounds.Min.X
+			for front = back + 1; front < bounds.Max.X; front++ {
+				// go until we detect an edge, then sort the area
+				i2 := yi + (front * 4)
+				i1 := i2 - 4
+				p1 := img.Pix[i1 : i1+3]
+				p2 := img.Pix[i2 : i2+3]
+				// check against delta
+				pd := colorDist2(p1, p2)
+				if uint32(delta) > pd {
+					continue
+				}
+				// sort and step
+				SortArea(img, (back*4)+yi, (front*4)+yi, reverse)
+				back = front
 			}
-			// sort and step
+			// sort the last bit of the row
 			SortArea(img, (back*4)+yi, (front*4)+yi, reverse)
-			back = front
-		}
-		// sort the last bit of the row
-		SortArea(img, (back*4)+yi, (front*4)+yi, reverse)
+		}()
 	}
 
+	wg.Wait()
+	fmt.Printf("\n")
 	return img, nil
 }
 
 func SortArea(img *image.RGBA, iback, ifrontin int, reverse bool) {
-	//fmt.Printf("\t%d %d\n", iback/4, ifrontin/4)
 	// bubble pixels
 	for ifront := ifrontin; ifront > iback; ifront = ifront - 4 {
-		//fmt.Printf("\t\t %d - %d\n", iback, ifront)
 		for i := iback; i < ifront-4; i = i + 4 {
 			i1 := i
 			i2 := i1 + 4
-			//fmt.Printf("\t\t%d %d\n", i1, i2)
 			p1 := img.Pix[i1 : i1+3]
 			p2 := img.Pix[i2 : i2+3]
 			sum1 := colorSum(p1)
