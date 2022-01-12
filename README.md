@@ -1,8 +1,6 @@
 # goPixelSort
 A pixel sorting implementation in go
 
-[See it in action here](http://byte-off.com/project/hello-world/)
-
 ## Installation
 1. Make sure you have the latest version of go installed
 2. Download "PixelSort.go"
