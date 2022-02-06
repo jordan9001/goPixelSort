@@ -2,7 +2,7 @@
 A pixel sorting implementation in go
 
 ## Installation
-1. Make sure you have the latest version of go installed
+1. Make sure you have go installed
 2. Download "PixelSort.go"
 3. Use `go build PixelSort.go` to produce an executable
 
