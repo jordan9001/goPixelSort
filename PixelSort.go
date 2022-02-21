@@ -27,6 +27,7 @@ type ArgsIn_t struct {
 	rev       bool
 	randgroup bool
 	angle     int
+	scale     float64
 	effect    string
 	chanhue   string
 	chandeg   int
@@ -40,28 +41,30 @@ var ArgsIn ArgsIn_t
 
 func init() {
 	const (
-		default_file    string = ""
-		usage_file      string = "(required) Source image (.jpg or .png)"
-		usage_outfile   string = "(required) Output image (.jpg or .png)"
-		default_delta   int    = 450
-		usage_delta     string = "Sensitivity to edges for sorting effects"
-		usage_rev       string = "swap the direction" // TODO change this into a angle direction for the grad
-		usage_rand      string = "randomize in sorted group"
-		default_angle   int    = 0
-		usage_angle     string = "TODO"
-		default_effect  string = "linesort"
-		usage_effect    string = "Selected effect (linesort|blocksort|floodsort|dct)"
-		default_chanhue string = "FF0000"
-		default_chandeg int    = 360
-		usage_chanhue   string = "Hue to isolate (As hex value, eg FF0000 for reg centered channel)"
-		usage_chandeg   string = "Size of hue to isolate (As degrees, eg 120 for just 1/3 of color space)"
-		usage_chanjoin  string = "Don't join isolated channel after effect"
-		default_dcthigh int    = 0
-		default_dctlow  int    = 0
-		default_dctblok int    = 0x20
-		usage_dcthigh   string = "TODO"
-		usage_dctlow    string = "TODO"
-		usage_dctblok   string = "TODO"
+		default_file    string  = ""
+		usage_file      string  = "(required) Source image (.jpg or .png)"
+		usage_outfile   string  = "(required) Output image (.jpg or .png)"
+		default_delta   int     = 450
+		usage_delta     string  = "Sensitivity to edges for sorting effects"
+		usage_rev       string  = "swap the direction" // TODO change this into a angle direction for the grad
+		usage_rand      string  = "randomize in sorted group"
+		default_scale   float64 = 1.0
+		usage_scale     string  = "sample every xth pixel (e.g. 1.5 will downsample to 2/3)"
+		default_angle   int     = 0
+		usage_angle     string  = "TODO"
+		default_effect  string  = "linesort"
+		usage_effect    string  = "Selected effect (linesort|blocksort|floodsort|dct)"
+		default_chanhue string  = "FF0000"
+		default_chandeg int     = 360
+		usage_chanhue   string  = "Hue to isolate (As hex value, eg FF0000 for reg centered channel)"
+		usage_chandeg   string  = "Size of hue to isolate (As degrees, eg 120 for just 1/3 of color space)"
+		usage_chanjoin  string  = "Don't join isolated channel after effect"
+		default_dcthigh int     = 0
+		default_dctlow  int     = 0
+		default_dctblok int     = 0x20
+		usage_dcthigh   string  = "TODO"
+		usage_dctlow    string  = "TODO"
+		usage_dctblok   string  = "TODO"
 	)
 
 	flag.BoolVar(&ArgsIn.help, "h", false, "Prints the usage")
@@ -74,6 +77,8 @@ func init() {
 	flag.IntVar(&ArgsIn.delta, "d", default_delta, usage_delta+" (shorthand)")
 	flag.BoolVar(&ArgsIn.rev, "r", false, usage_rev)
 	flag.BoolVar(&ArgsIn.randgroup, "rnd", false, usage_rand)
+
+	flag.Float64Var(&ArgsIn.scale, "smp", default_scale, usage_scale)
 
 	flag.StringVar(&ArgsIn.effect, "effect", default_effect, usage_effect)
 	flag.StringVar(&ArgsIn.effect, "e", default_effect, usage_effect+" (shorthand)")
@@ -132,7 +137,25 @@ func main() {
 	}
 
 	// Apply isolation steps (separate channel, downrez, rotate)
-	//TODO scale img down
+	if ArgsIn.scale != 1.0 {
+		//TODO scale img down
+		obound := rgbaimg.Bounds()
+		nw := float64(obound.Dx()) / ArgsIn.scale
+		nh := float64(obound.Dy()) / ArgsIn.scale
+		nbound := image.Rect(0, 0, int(nw), int(nh))
+		newimg := image.NewNRGBA(nbound)
+		for y := 0; y < nbound.Max.Y; y++ {
+			new_yi := y * newimg.Stride
+			old_yi := int(float64(y)*ArgsIn.scale) * rgbaimg.Stride
+			for x := 0; x < nbound.Max.X; x++ {
+				new_i := new_yi + (x * 4)
+				old_i := old_yi + (int(float64(x)*ArgsIn.scale) * 4)
+
+				copy(newimg.Pix[new_i:new_i+4], rgbaimg.Pix[old_i:old_i+4])
+			}
+		}
+		rgbaimg = newimg
+	}
 
 	// do rotation
 	ArgsIn.angle = (ArgsIn.angle + 360) % 360
@@ -191,6 +214,7 @@ func main() {
 	}
 
 	// apply selected effect
+	fmt.Println("Applying Effect")
 	var outimg *image.NRGBA
 	if strings.HasPrefix(ArgsIn.effect, "line") || strings.HasPrefix(ArgsIn.effect, "pix") {
 		outimg, err = PixelSort(rgbaimg, uint32(ArgsIn.delta), ArgsIn.rev, ArgsIn.randgroup)
@@ -542,7 +566,7 @@ func FloodSort(img *image.NRGBA, delta uint32, reverse bool, randgroup bool) (*i
 		}(group, img, reverse)
 	}
 
-	fmt.Printf("DEBUG Wait on %v sorters %v/%v\n", debuggroupcount, debugcheckcount, debugfullcheckcount)
+	fmt.Printf("Waiting on %v sorters %v/%v\n", debuggroupcount, debugcheckcount, debugfullcheckcount)
 	wg.Wait()
 
 	return img, nil
