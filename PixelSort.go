@@ -7,8 +7,11 @@ import (
 	"image/draw"
 	"image/jpeg" // register the JPG format with the image package
 	"image/png"  // register the PNG format with the image package
+	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 )
 
@@ -17,26 +20,48 @@ const (
 )
 
 type ArgsIn_t struct {
-	help    bool
-	file    string
-	outfile string
-	delta   int
-	rev     bool
-	angle   int
+	help      bool
+	file      string
+	outfile   string
+	delta     int
+	rev       bool
+	randgroup bool
+	angle     int
+	effect    string
+	chanhue   string
+	chandeg   int
+	chanjoin  bool
+	dcthigh   int
+	dctlow    int
+	dctblok   int
 }
 
 var ArgsIn ArgsIn_t
 
 func init() {
 	const (
-		default_file  string = ""
-		usage_file    string = "(required) Source image (.jpg or .png)"
-		usage_outfile string = "(required) Output image (.jpg or .png)"
-		default_delta int    = 450
-		usage_delta   string = "Sensitivity to edges"
-		usage_rev     string = "swap the direction"
-		default_angle int    = 0
-		usage_angle   string = "(Currently unimplemented)"
+		default_file    string = ""
+		usage_file      string = "(required) Source image (.jpg or .png)"
+		usage_outfile   string = "(required) Output image (.jpg or .png)"
+		default_delta   int    = 450
+		usage_delta     string = "Sensitivity to edges for sorting effects"
+		usage_rev       string = "swap the direction" // TODO change this into a angle direction for the grad
+		usage_rand      string = "randomize in sorted group"
+		default_angle   int    = 0
+		usage_angle     string = "TODO"
+		default_effect  string = "linesort"
+		usage_effect    string = "Selected effect (linesort|blocksort|floodsort|dct)"
+		default_chanhue string = "FF0000"
+		default_chandeg int    = 360
+		usage_chanhue   string = "Hue to isolate (As hex value, eg FF0000 for reg centered channel)"
+		usage_chandeg   string = "Size of hue to isolate (As degrees, eg 120 for just 1/3 of color space)"
+		usage_chanjoin  string = "Don't join isolated channel after effect"
+		default_dcthigh int    = 0
+		default_dctlow  int    = 0
+		default_dctblok int    = 0x20
+		usage_dcthigh   string = "TODO"
+		usage_dctlow    string = "TODO"
+		usage_dctblok   string = "TODO"
 	)
 
 	flag.BoolVar(&ArgsIn.help, "h", false, "Prints the usage")
@@ -48,6 +73,19 @@ func init() {
 	flag.IntVar(&ArgsIn.delta, "delta", default_delta, usage_delta)
 	flag.IntVar(&ArgsIn.delta, "d", default_delta, usage_delta+" (shorthand)")
 	flag.BoolVar(&ArgsIn.rev, "r", false, usage_rev)
+	flag.BoolVar(&ArgsIn.randgroup, "rnd", false, usage_rand)
+
+	flag.StringVar(&ArgsIn.effect, "effect", default_effect, usage_effect)
+	flag.StringVar(&ArgsIn.effect, "e", default_effect, usage_effect+" (shorthand)")
+
+	flag.StringVar(&ArgsIn.chanhue, "c_h", default_chanhue, usage_chanhue)
+	flag.IntVar(&ArgsIn.chandeg, "c_d", default_chandeg, usage_chandeg)
+	flag.BoolVar(&ArgsIn.chanjoin, "c_j", false, usage_chanjoin)
+
+	flag.IntVar(&ArgsIn.dcthigh, "d_h", default_dcthigh, usage_dcthigh)
+	flag.IntVar(&ArgsIn.dctlow, "d_l", default_dctlow, usage_dctlow)
+	flag.IntVar(&ArgsIn.dctblok, "d_b", default_dctblok, usage_dctblok)
+
 }
 
 func main() {
@@ -73,7 +111,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Reading to %s\n", ArgsIn.file)
+	fmt.Printf("Reading %s\n", ArgsIn.file)
 	// decode our image
 	img, _, err := image.Decode(infile)
 	if err != nil {
@@ -82,30 +120,112 @@ func main() {
 		os.Exit(1)
 	}
 
-	// put it in a RGBA type
-	var rgbaimg *image.RGBA
-	if iimg, ok := img.(*image.RGBA); ok {
+	// put it in a NRGBA type
+	var rgbaimg *image.NRGBA
+	if iimg, ok := img.(*image.NRGBA); ok {
 		rgbaimg = iimg
 	} else {
 		// it isn't already RGBA, so we have to convert it
 		rct := img.Bounds()
-		rgbaimg = image.NewRGBA(rct)
+		rgbaimg = image.NewNRGBA(rct)
 		draw.Draw(rgbaimg, rct, img, rct.Min, draw.Src)
 	}
 
+	// Apply isolation steps (separate channel, downrez, rotate)
+	//TODO scale img down
+
 	// do rotation
 	ArgsIn.angle = (ArgsIn.angle + 360) % 360
-	// TODO
-
-	// pixel sort
-	pxsrtd, err := PixelSort(rgbaimg, ArgsIn.delta, ArgsIn.rev)
-	if err != nil {
-		fmt.Printf("Unable to pixel sort due to error : %v\n", err)
+	if ArgsIn.angle != 0 {
+		fmt.Println("TODO apply rotation")
 		os.Exit(1)
 	}
 
+	// isolate selected channel
+	var otherchans *image.NRGBA = nil
+
+	if ArgsIn.chandeg < 0 {
+		fmt.Println("Please specify a channel spread from 0 to 360")
+		os.Exit(1)
+	}
+	if ArgsIn.chandeg < 360 {
+		c, err := hex2col(ArgsIn.chanhue)
+		if err != nil {
+			fmt.Printf("Unrecognized hex color %q", ArgsIn.chanhue)
+			os.Exit(1)
+		}
+
+		if c[3] != 0xff {
+			fmt.Printf("Warning, ignoring non-opaque alpha component of channel color")
+		}
+
+		if c[0] == 0 && c[1] == 0 && c[2] == 0 {
+			fmt.Println("Channel color must not be black")
+			os.Exit(1)
+		}
+		if c[0] == 0xff && c[1] == 0xff && c[2] == 0xff {
+			fmt.Println("Channel color must not be white")
+			os.Exit(1)
+		}
+
+		if ArgsIn.chandeg == 120 {
+			if (c[0] == 0xff || c[0] == 0) &&
+				(c[1] == 0xff || c[1] == 0) &&
+				(c[2] == 0xff || c[2] == 0) {
+
+				// fast mask path
+				rgbaimg, otherchans = separateSimpleChannels(rgbaimg, c)
+			}
+
+		}
+
+		if otherchans == nil {
+			//TODO
+			fmt.Println("TODO separate out non-simple RGB channels")
+			os.Exit(1)
+		}
+	}
+
+	if ArgsIn.rev && ArgsIn.randgroup {
+		fmt.Printf("Warning, randgroup overrides reverse option")
+	}
+
+	// apply selected effect
+	var outimg *image.NRGBA
+	if strings.HasPrefix(ArgsIn.effect, "line") || strings.HasPrefix(ArgsIn.effect, "pix") {
+		outimg, err = PixelSort(rgbaimg, uint32(ArgsIn.delta), ArgsIn.rev, ArgsIn.randgroup)
+		if err != nil {
+			fmt.Printf("Unable to pixel sort due to error : %v\n", err)
+			os.Exit(1)
+		}
+	} else if strings.HasPrefix(ArgsIn.effect, "block") {
+		//TODO
+		fmt.Println("TODO blocksort effect")
+		os.Exit(1)
+	} else if strings.HasPrefix(ArgsIn.effect, "flood") {
+		outimg, err = FloodSort(rgbaimg, uint32(ArgsIn.delta), ArgsIn.rev, ArgsIn.randgroup)
+		if err != nil {
+			fmt.Printf("Unable to flood sort due to error : %v\n", err)
+			os.Exit(1)
+		}
+	} else if strings.HasPrefix(ArgsIn.effect, "dct") {
+		//TODO
+		fmt.Println("TODO dct effect")
+		os.Exit(1)
+	} else {
+		fmt.Printf("Unknown effect %v\n", ArgsIn.effect)
+		os.Exit(1)
+	}
+
+	if otherchans != nil && !ArgsIn.chanjoin {
+		//TODO join back with the other channels
+		outimg = addImages(outimg, otherchans)
+	}
+
 	// rotate back
-	// TODO
+	if ArgsIn.angle != 0 {
+		//TODO
+	}
 
 	// output the image
 	fmt.Printf("Writing to %s\n", ArgsIn.outfile)
@@ -117,14 +237,18 @@ func main() {
 	defer outfile.Close()
 
 	if ftype == ".jpg" || ftype == ".jpeg" {
-		jpeg.Encode(outfile, pxsrtd, nil)
+		jpeg.Encode(outfile, outimg, nil)
 	} else if ftype == ".png" {
-		png.Encode(outfile, pxsrtd)
+		png.Encode(outfile, outimg)
 	}
 	os.Exit(0)
 }
 
-func PixelSort(img *image.RGBA, delta int, reverse bool) (image.Image, error) {
+func PixelSort(img *image.NRGBA, delta uint32, reverse bool, randgroup bool) (*image.NRGBA, error) {
+	if delta <= 0 {
+		return img, nil
+	}
+
 	var wg sync.WaitGroup
 	// iterate across the image
 	bounds := img.Bounds()
@@ -140,23 +264,59 @@ func PixelSort(img *image.RGBA, delta int, reverse bool) (image.Image, error) {
 			defer wg.Done()
 			var back, front int
 			back = bounds.Min.X
+			inclear := true
 			for front = back + 1; front < bounds.Max.X; front++ {
-				// go until we detect an edge, then sort the area
+
 				i2 := yi + (front * 4)
 				i1 := i2 - 4
-				p1 := img.Pix[i1 : i1+3]
-				p2 := img.Pix[i2 : i2+3]
-				// check against delta
-				pd := colorDist2(p1, p2)
-				if uint32(delta) > pd {
+
+				// first get to a spot past 0 alpha segment
+				if img.Pix[i1+3] == 0 {
+					back = front
 					continue
 				}
+				inclear = false
+
+				p1 := img.Pix[i1 : i1+4] // front -1
+				p2 := img.Pix[i2 : i2+4] // front
+
+				// go until we detect an edge, then sort the area
+				dosort := false
+
+				// check if we hit a 0 alpha
+				if img.Pix[i2+3] == 0 {
+					inclear = true
+					dosort = true
+				}
+
+				// check against delta
+				if !dosort {
+					pd := colorDist2(p1, p2)
+					if delta < pd {
+						dosort = true
+					}
+				}
+
+				if !dosort {
+					continue
+				}
+
 				// sort and step
-				SortArea(img, (back*4)+yi, (front*4)+yi, reverse)
+				if !randgroup {
+					SortLineArea(img, (back*4)+yi, (front*4)+yi, reverse)
+				} else {
+					RandomizeLineArea(img, (back*4)+yi, (front*4)+yi)
+				}
 				back = front
 			}
-			// sort the last bit of the row
-			SortArea(img, (back*4)+yi, (front*4)+yi, reverse)
+			// sort the last bit of the row as long as it isn't 0 alpha
+			if !inclear {
+				if !randgroup {
+					SortLineArea(img, (back*4)+yi, (front*4)+yi, reverse)
+				} else {
+					RandomizeLineArea(img, (back*4)+yi, (front*4)+yi)
+				}
+			}
 		}()
 	}
 
@@ -165,14 +325,18 @@ func PixelSort(img *image.RGBA, delta int, reverse bool) (image.Image, error) {
 	return img, nil
 }
 
-func SortArea(img *image.RGBA, iback, ifrontin int, reverse bool) {
+func SortLineArea(img *image.NRGBA, iback, ifrontin int, reverse bool) {
+	if iback+4 >= ifrontin {
+		return
+	}
+
 	// bubble pixels
 	for ifront := ifrontin; ifront > iback; ifront = ifront - 4 {
 		for i := iback; i < ifront-4; i = i + 4 {
 			i1 := i
 			i2 := i1 + 4
-			p1 := img.Pix[i1 : i1+3]
-			p2 := img.Pix[i2 : i2+3]
+			p1 := img.Pix[i1 : i1+4]
+			p2 := img.Pix[i2 : i2+4]
 			sum1 := colorSum(p1)
 			sum2 := colorSum(p2)
 			// swap the points if brighter on left
@@ -190,6 +354,198 @@ func SortArea(img *image.RGBA, iback, ifrontin int, reverse bool) {
 			}
 		}
 	}
+}
+
+func RandomizeLineArea(img *image.NRGBA, iback, ifront int) {
+	rand.Shuffle((ifront-iback)/4, func(i, j int) {
+		i1 := iback + (i * 4)
+		i2 := iback + (j * 4)
+		img.Pix[i1], img.Pix[i2] = img.Pix[i2], img.Pix[i1]
+		img.Pix[i1+1], img.Pix[i2+1] = img.Pix[i2+1], img.Pix[i1+1]
+		img.Pix[i1+2], img.Pix[i2+2] = img.Pix[i2+2], img.Pix[i1+2]
+	})
+}
+
+type pxpt struct {
+	x int
+	y int
+}
+
+func FloodSort(img *image.NRGBA, delta uint32, reverse bool, randgroup bool) (*image.NRGBA, error) {
+	if delta <= 0 {
+		return img, nil
+	}
+
+	var wg sync.WaitGroup
+	// iterate across the image
+	bounds := img.Bounds()
+
+	w := bounds.Max.X - bounds.Min.X
+	h := bounds.Max.Y - bounds.Min.Y
+
+	if w <= 0 || h <= 0 {
+		return img, nil
+	}
+
+	var checked []bool = make([]bool, w*h)
+
+	var wave []pxpt = make([]pxpt, 0, w*3)
+
+	// start at min
+	//TODO start at non 0alpha
+	wave = append(wave, pxpt{bounds.Min.X, bounds.Min.Y})
+
+	prevcap := cap(wave)
+
+	debugcheckcount := 0
+	debugfullcheckcount := w * h
+	debuggroupcount := 0
+
+	// have a processing wave going out, goroutines will sort flooded areas
+	for len(wave) > 0 {
+		var pt pxpt
+		pt, wave = wave[0], wave[1:]
+
+		// if this is already checked, continue
+		if checked[(pt.x-bounds.Min.X)+((pt.y-bounds.Min.Y)*w)] {
+			continue
+		}
+
+		// flood out a group
+		var group []pxpt = make([]pxpt, 0, prevcap)
+		var groupwave []pxpt = make([]pxpt, 0, prevcap)
+		debuggroupcount += 1
+
+		groupwave = append(group, pt)
+		checked[(pt.x-bounds.Min.X)+((pt.y-bounds.Min.Y)*w)] = true
+		debugcheckcount += 1
+
+		for len(groupwave) > 0 {
+			var gpt pxpt
+			gpt, groupwave = groupwave[0], groupwave[1:]
+
+			// add this to the group
+			group = append(group, gpt)
+
+			// check this is checked
+			ix := gpt.x - bounds.Min.X
+			iy := gpt.y - bounds.Min.Y
+			if !checked[ix+(iy*w)] {
+				panic("Px in groupwave that was not already checked")
+			}
+
+			i1 := (gpt.y * img.Stride) + (gpt.x * 4)
+			p1 := img.Pix[i1 : i1+4]
+
+			// if neighbors are unchecked, see if they are within delta
+			// add to group, else add to wave
+			for dy := -1; dy <= 1; dy++ {
+				if dy == 0 || iy+dy < 0 || iy+dy >= h {
+					continue
+				}
+
+				if checked[ix+((iy+dy)*w)] {
+					continue
+				}
+
+				i2 := ((gpt.y + dy) * img.Stride) + (gpt.x * 4)
+				p2 := img.Pix[i2 : i2+4]
+
+				//TODO check for 0alpha
+
+				// check if within delta
+				pd := colorDist2(p1, p2)
+				if delta < pd {
+					// add to wave
+					wave = append(wave, pxpt{x: gpt.x, y: gpt.y + dy})
+				} else {
+					// add to group and mark checked
+					groupwave = append(groupwave, pxpt{x: gpt.x, y: gpt.y + dy})
+					checked[ix+((iy+dy)*w)] = true
+					debugcheckcount += 1
+				}
+			}
+			for dx := -1; dx <= 1; dx++ {
+				if dx == 0 || ix+dx < 0 || ix+dx >= w {
+					continue
+				}
+
+				if checked[(ix+dx)+(iy*w)] {
+					continue
+				}
+
+				i2 := (gpt.y * img.Stride) + ((gpt.x + dx) * 4)
+				p2 := img.Pix[i2 : i2+4]
+
+				//TODO check for 0alpha
+
+				// check if within delta
+				pd := colorDist2(p1, p2)
+				if delta < pd {
+					// add to wave
+					wave = append(wave, pxpt{x: gpt.x + dx, y: gpt.y})
+				} else {
+					// add to group
+					groupwave = append(groupwave, pxpt{x: gpt.x + dx, y: gpt.y})
+					checked[(ix+dx)+(iy*w)] = true
+					debugcheckcount += 1
+				}
+			}
+		}
+
+		// sort the group in a goroutine
+		//fmt.Printf("DEBUG Start %v group for %v (wave at %v) %v/%v\n", debuggroupcount, len(group), len(wave), debugcheckcount, debugfullcheckcount)
+		wg.Add(1)
+		go func(group []pxpt, img *image.NRGBA, rev bool) {
+			defer wg.Done()
+
+			// we should be soul owners of the pixels in the group, so no sync needed beyond waitgroup
+
+			// gather colors
+			colors := make([][4]uint8, len(group))
+			for i, pt := range group {
+				i1 := (pt.y * img.Stride) + (pt.x * 4)
+				p1 := img.Pix[i1 : i1+4]
+				copy(colors[i][:], p1[:4])
+			}
+
+			if !randgroup {
+				// sort points by direction
+				sort.Slice(group, func(i, j int) bool {
+					//DEBUG
+					res := group[i].x < group[j].x
+					if rev {
+						return !res
+					}
+					return res
+				})
+
+				// sort colors
+				sort.Slice(colors, func(i, j int) bool {
+					sum1 := colorSum(colors[i][:])
+					sum2 := colorSum(colors[j][:])
+					return sum1 < sum2
+				})
+			} else {
+				// randomize points
+				rand.Shuffle(len(group), func(i, j int) {
+					group[i], group[j] = group[j], group[i]
+				})
+			}
+
+			// put sorted colors in the points
+			for i := 0; i < len(group); i++ {
+				i1 := (group[i].y * img.Stride) + (group[i].x * 4)
+				copy(img.Pix[i1:i1+4], colors[i][:])
+			}
+
+		}(group, img, reverse)
+	}
+
+	fmt.Printf("DEBUG Wait on %v sorters %v/%v\n", debuggroupcount, debugcheckcount, debugfullcheckcount)
+	wg.Wait()
+
+	return img, nil
 }
 
 func colorSum(p []uint8) int64 {
@@ -210,4 +566,99 @@ func colorDist2(p1, p2 []uint8) uint32 {
 	bd = bd * bd
 
 	return uint32(rd + bd + gd)
+}
+
+func hex2col(hex string) ([]uint8, error) {
+	cs := make([]uint8, 4)
+	cs[3] = 0xff
+
+	hex = strings.TrimPrefix(hex, "#")
+	hex = strings.TrimPrefix(hex, "0x")
+
+	var err error = nil
+
+	switch len(hex) {
+	case 8:
+		_, err = fmt.Sscanf(hex[6:], "%02x", &cs[3])
+		if err != nil {
+			return nil, err
+		}
+		fallthrough
+	case 6:
+		_, err = fmt.Sscanf(hex, "%02x%02x%02x", &cs[0], &cs[1], &cs[2])
+	case 4:
+		_, err = fmt.Sscanf(hex[3:], "%1x", &cs[3])
+		if err != nil {
+			return nil, err
+		}
+		cs[3] |= (cs[3] << 4)
+		fallthrough
+	case 3:
+		_, err = fmt.Sscanf(hex, "%1x%1x%1x", &cs[0], &cs[1], &cs[2])
+		cs[0] |= (cs[0] << 4)
+		cs[1] |= (cs[1] << 4)
+		cs[2] |= (cs[2] << 4)
+	default:
+		return nil, fmt.Errorf("Color %v is not recognized as a valid hex color length", hex)
+	}
+
+	return cs, err
+}
+
+func separateSimpleChannels(img *image.NRGBA, c []uint8) (*image.NRGBA, *image.NRGBA) {
+	r := c[0] == 0xff
+	g := c[1] == 0xff
+	b := c[2] == 0xff
+
+	bounds := img.Bounds()
+	other := image.NewNRGBA(bounds)
+
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		yi := img.Stride * y
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			i := yi + (x * 4)
+
+			if !r {
+				other.Pix[i] = img.Pix[i]
+				img.Pix[i] = 0
+			}
+
+			if !g {
+				other.Pix[i+1] = img.Pix[i+1]
+				img.Pix[i+1] = 0
+			}
+
+			if !b {
+				other.Pix[i+2] = img.Pix[i+2]
+				img.Pix[i+2] = 0
+			}
+
+			// share same alpha I guess
+			other.Pix[i+3] = img.Pix[i+3]
+		}
+	}
+
+	return img, other
+}
+
+func addImages(a, b *image.NRGBA) *image.NRGBA {
+	if a.Rect != b.Rect {
+		panic("Tried to add two images of different sizes")
+	}
+
+	bounds := a.Rect
+
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		yi := a.Stride * y
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			i := yi + (x * 4)
+
+			a.Pix[i] += b.Pix[i]
+			a.Pix[i+1] += b.Pix[i+1]
+			a.Pix[i+2] += b.Pix[i+2]
+			// Don't add alpha
+		}
+	}
+
+	return a
 }
