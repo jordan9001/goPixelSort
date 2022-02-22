@@ -511,6 +511,9 @@ func FloodSort(img *image.NRGBA, delta uint32, reverse, randgroup bool, shape in
 
 		shapefunc(pt, &group, &wave, img, checked, delta, shape)
 
+		if len(group) <= 1 {
+			continue
+		}
 		// sort the group in a goroutine
 		//fmt.Printf("DEBUG Start %v group for %v (wave at %v) %v/%v\n", debuggroupcount, len(group), len(wave), debugcheckcount, debugfullcheckcount)
 		wg.Add(1)
@@ -672,38 +675,269 @@ func FloodBox(startpt pxpt, group *[]pxpt, wave *[]pxpt, img *image.NRGBA, check
 	// from starting point keep expanding out until we hit something checked, 0alpha, or past delta
 	*group = append(*group, startpt)
 
-	/*bounds := img.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
+	bounds := img.Bounds()
+	w := bounds.Dx()
 
 	up, down, left, right := 0, 0, 0, 0
 	blockup, blockdown, blockleft, blockright := false, false, false, false
 	for {
 		if shape == SQUARE_SHAPE && ((blockup && blockdown) || (blockleft && blockright)) {
 			break
+		} else if blockup && blockdown && blockright && blockleft {
+			break
 		}
 
+		// UP
 		if !blockup {
-			up += 1
+			y := startpt.y - (up + 1)
+			if y < bounds.Min.Y {
+				blockup = true
+			} else {
+				for x := startpt.x - left; x <= (startpt.x + right); x++ {
+					ix := x - bounds.Min.X
+					iy := y - bounds.Min.Y
 
-			y := startpt.y - up
-			for x := startpt.x - left; x <= (startpt.x + right); x++ {
-				ix := x - bounds.Min.X
-				iy := y - bounds.Min.Y
+					if checked[ix+(iy*w)] {
+						blockup = true
+						break
+					}
 
-				if checked[ix+(iy*w)] {
-					blockup = true
+					i1 := (y * img.Stride) + (x * 4)
+					p1 := img.Pix[i1 : i1+4]
+
+					// check 0alpha
+					if p1[3] == 0 {
+						blockup = true
+						break
+					}
+
+					i2 := ((y + 1) * img.Stride) + (x * 4)
+					p2 := img.Pix[i2 : i2+4]
+
+					pd := colorDist2(p1, p2)
+					if pd > delta {
+						blockup = true
+						break
+					}
 				}
+				if !blockup {
+					// add those to the group
+					for x := startpt.x - left; x <= (startpt.x + right); x++ {
+						ix := x - bounds.Min.X
+						iy := y - bounds.Min.Y
 
-				i1 := (y * img.Stride) + (x * 4)
-				p1 := img.Pix[i1 : i1+4]
-				i2 := ((y + 1) * img.Stride) + (x * 4)
-				p2 := img.Pix[i2 : i2+4]
+						checked[ix+(iy*w)] = true
+
+						*group = append(*group, pxpt{x, y})
+					}
+
+					up += 1
+				}
+			}
+		}
+
+		// LEFT
+		if !blockleft {
+			x := startpt.x - (left + 1)
+			if x < bounds.Min.X {
+				blockleft = true
+			} else {
+				for y := startpt.y - up; y <= (startpt.y + down); y++ {
+					ix := x - bounds.Min.X
+					iy := y - bounds.Min.Y
+
+					if checked[ix+(iy*w)] {
+						blockleft = true
+						break
+					}
+
+					i1 := (y * img.Stride) + (x * 4)
+					p1 := img.Pix[i1 : i1+4]
+
+					// check 0alpha
+					if p1[3] == 0 {
+						blockleft = true
+						break
+					}
+
+					i2 := (y * img.Stride) + ((x + 1) * 4)
+					p2 := img.Pix[i2 : i2+4]
+
+					pd := colorDist2(p1, p2)
+					if pd > delta {
+						blockleft = true
+						break
+					}
+				}
+				if !blockleft {
+					// add those to the group
+					for y := startpt.y - up; y <= (startpt.y + down); y++ {
+						ix := x - bounds.Min.X
+						iy := y - bounds.Min.Y
+
+						checked[ix+(iy*w)] = true
+
+						*group = append(*group, pxpt{x, y})
+					}
+
+					left += 1
+				}
+			}
+		}
+
+		// DOWN
+		if !blockdown {
+			y := startpt.y + (down + 1)
+			if y >= bounds.Max.Y {
+				blockdown = true
+			} else {
+				for x := startpt.x - left; x <= (startpt.x + right); x++ {
+					ix := x - bounds.Min.X
+					iy := y - bounds.Min.Y
+
+					if checked[ix+(iy*w)] {
+						blockdown = true
+						break
+					}
+
+					i1 := (y * img.Stride) + (x * 4)
+					p1 := img.Pix[i1 : i1+4]
+
+					// check 0alpha
+					if p1[3] == 0 {
+						blockdown = true
+						break
+					}
+
+					i2 := ((y - 1) * img.Stride) + (x * 4)
+					p2 := img.Pix[i2 : i2+4]
+
+					pd := colorDist2(p1, p2)
+					if pd > delta {
+						blockdown = true
+						break
+					}
+				}
+				if !blockdown {
+					// add those to the group
+					for x := startpt.x - left; x <= (startpt.x + right); x++ {
+						ix := x - bounds.Min.X
+						iy := y - bounds.Min.Y
+
+						checked[ix+(iy*w)] = true
+
+						*group = append(*group, pxpt{x, y})
+					}
+
+					down += 1
+				}
+			}
+		}
+
+		// RIGHT
+		if !blockright {
+			x := startpt.x + (right + 1)
+			if x >= bounds.Max.X {
+				blockright = true
+			} else {
+				for y := startpt.y - up; y <= (startpt.y + down); y++ {
+					ix := x - bounds.Min.X
+					iy := y - bounds.Min.Y
+
+					if checked[ix+(iy*w)] {
+						blockright = true
+						break
+					}
+
+					i1 := (y * img.Stride) + (x * 4)
+					p1 := img.Pix[i1 : i1+4]
+
+					// check 0alpha
+					if p1[3] == 0 {
+						blockright = true
+						break
+					}
+
+					i2 := (y * img.Stride) + ((x - 1) * 4)
+					p2 := img.Pix[i2 : i2+4]
+
+					pd := colorDist2(p1, p2)
+					if pd > delta {
+						blockright = true
+						break
+					}
+				}
+				if !blockright {
+					// add those to the group
+					for y := startpt.y - up; y <= (startpt.y + down); y++ {
+						ix := x - bounds.Min.X
+						iy := y - bounds.Min.Y
+
+						checked[ix+(iy*w)] = true
+
+						*group = append(*group, pxpt{x, y})
+					}
+
+					right += 1
+				}
 			}
 		}
 	}
 
 	// add all our nonchecked edges to the wave
-	*/
+	//up & down
+	for x := startpt.x - (left + 1); x <= (startpt.x + (right + 1)); x++ {
+		if x < bounds.Min.X || x >= bounds.Max.X {
+			continue
+		}
+
+		ix := x - bounds.Min.X
+
+		y := startpt.y - (up + 1)
+		if y >= bounds.Min.Y && y < bounds.Max.Y {
+			iy := y - bounds.Min.Y
+
+			if !checked[ix+(iy*w)] {
+				*wave = append(*wave, pxpt{x, y})
+			}
+		}
+
+		y = startpt.y + (down + 1)
+		if y >= bounds.Min.Y && y < bounds.Max.Y {
+			iy := y - bounds.Min.Y
+
+			if !checked[ix+(iy*w)] {
+				*wave = append(*wave, pxpt{x, y})
+			}
+		}
+	}
+	//left & right
+	for y := startpt.y - (up + 1); y <= (startpt.y + (down + 1)); y++ {
+		if y < bounds.Min.Y || y >= bounds.Max.Y {
+			continue
+		}
+
+		iy := y - bounds.Min.Y
+
+		x := startpt.x - (left + 1)
+		if x >= bounds.Min.X && x < bounds.Max.X {
+			ix := x - bounds.Min.X
+
+			if !checked[ix+(iy*w)] {
+				*wave = append(*wave, pxpt{x, y})
+			}
+		}
+
+		x = startpt.x + (right + 1)
+		if x >= bounds.Min.X && x < bounds.Max.X {
+			ix := x - bounds.Min.X
+
+			if !checked[ix+(iy*w)] {
+				*wave = append(*wave, pxpt{x, y})
+			}
+		}
+	}
+
 }
 
 func colorSum(p []uint8) int64 {
