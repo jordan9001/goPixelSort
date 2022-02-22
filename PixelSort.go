@@ -249,7 +249,7 @@ func main() {
 			fmt.Printf("Unable to flood sort due to error : %v\n", err)
 			os.Exit(1)
 		}
-	} else if strings.HasPrefix(ArgsIn.effect, "block") {
+	} else if strings.HasPrefix(ArgsIn.effect, "block") || strings.HasPrefix(ArgsIn.effect, "box") {
 		outimg, err = FloodSort(rgbaimg, uint32(ArgsIn.delta), ArgsIn.rev, ArgsIn.randgroup, BOX_SHAPE)
 		if err != nil {
 			fmt.Printf("Unable to block sort due to error : %v\n", err)
