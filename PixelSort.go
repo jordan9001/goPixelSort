@@ -22,6 +22,12 @@ const (
 	VALUE_CONST uint = 15
 )
 
+const (
+	BLOB_SHAPE   int = 0
+	BOX_SHAPE    int = 1
+	SQUARE_SHAPE int = 2
+)
+
 type ArgsIn_t struct {
 	help      bool
 	file      string
@@ -59,7 +65,7 @@ func init() {
 		usage_effect    string  = "Selected effect (linesort|blocksort|floodsort|dct)"
 		default_chanhue string  = "FF0000"
 		default_chandeg int     = 360
-		usage_chanhue   string  = "Hue to isolate (As hex value, eg FF0000 for reg centered channel)"
+		usage_chanhue   string  = "Hue to isolate (As hex value, eg FF0000 for reg centered channel) use (r|g|b) to automatically set deg as well"
 		usage_chandeg   string  = "Size of hue to isolate (As degrees, eg 120 for just 1/3 of color space)"
 		usage_chanjoin  string  = "Don't join isolated channel after effect"
 		default_dcthigh int     = 0
@@ -87,13 +93,13 @@ func init() {
 	flag.StringVar(&ArgsIn.effect, "effect", default_effect, usage_effect)
 	flag.StringVar(&ArgsIn.effect, "e", default_effect, usage_effect+" (shorthand)")
 
-	flag.StringVar(&ArgsIn.chanhue, "c_h", default_chanhue, usage_chanhue)
-	flag.IntVar(&ArgsIn.chandeg, "c_d", default_chandeg, usage_chandeg)
-	flag.BoolVar(&ArgsIn.chanjoin, "c_j", false, usage_chanjoin)
+	flag.StringVar(&ArgsIn.chanhue, "ch", default_chanhue, usage_chanhue)
+	flag.IntVar(&ArgsIn.chandeg, "cd", default_chandeg, usage_chandeg)
+	flag.BoolVar(&ArgsIn.chanjoin, "cj", false, usage_chanjoin)
 
-	flag.IntVar(&ArgsIn.dcthigh, "d_h", default_dcthigh, usage_dcthigh)
-	flag.IntVar(&ArgsIn.dctlow, "d_l", default_dctlow, usage_dctlow)
-	flag.IntVar(&ArgsIn.dctblok, "d_b", default_dctblok, usage_dctblok)
+	flag.IntVar(&ArgsIn.dcthigh, "dh", default_dcthigh, usage_dcthigh)
+	flag.IntVar(&ArgsIn.dctlow, "dl", default_dctlow, usage_dctlow)
+	flag.IntVar(&ArgsIn.dctblok, "db", default_dctblok, usage_dctblok)
 
 }
 
@@ -141,7 +147,7 @@ func main() {
 	}
 
 	// Apply isolation steps (separate channel, downrez, rotate)
-	if ArgsIn.scale != 1.0 {
+	if ArgsIn.scale > 1.0 {
 		//TODO scale img down
 		obound := rgbaimg.Bounds()
 		nw := float64(obound.Dx()) / ArgsIn.scale
@@ -158,6 +164,7 @@ func main() {
 				copy(newimg.Pix[new_i:new_i+4], rgbaimg.Pix[old_i:old_i+4])
 			}
 		}
+		fmt.Printf("Scaled image down to %vx%v\n", nw, nh)
 		rgbaimg = newimg
 	}
 
@@ -174,6 +181,16 @@ func main() {
 	if ArgsIn.chandeg < 0 || ArgsIn.chandeg > 360 {
 		fmt.Println("Please specify a channel spread from 0 to 360")
 		os.Exit(1)
+	}
+	if ArgsIn.chanhue == "r" {
+		ArgsIn.chanhue = "FF0000"
+		ArgsIn.chandeg = 120
+	} else if ArgsIn.chanhue == "g" {
+		ArgsIn.chanhue = "00FF00"
+		ArgsIn.chandeg = 120
+	} else if ArgsIn.chanhue == "g" {
+		ArgsIn.chanhue = "0000FF"
+		ArgsIn.chandeg = 120
 	}
 	if ArgsIn.chandeg != 360 {
 		c, err := hex2col(ArgsIn.chanhue)
@@ -226,14 +243,22 @@ func main() {
 			fmt.Printf("Unable to pixel sort due to error : %v\n", err)
 			os.Exit(1)
 		}
-	} else if strings.HasPrefix(ArgsIn.effect, "block") {
-		//TODO
-		fmt.Println("TODO blocksort effect")
-		os.Exit(1)
 	} else if strings.HasPrefix(ArgsIn.effect, "flood") {
-		outimg, err = FloodSort(rgbaimg, uint32(ArgsIn.delta), ArgsIn.rev, ArgsIn.randgroup)
+		outimg, err = FloodSort(rgbaimg, uint32(ArgsIn.delta), ArgsIn.rev, ArgsIn.randgroup, BLOB_SHAPE)
 		if err != nil {
 			fmt.Printf("Unable to flood sort due to error : %v\n", err)
+			os.Exit(1)
+		}
+	} else if strings.HasPrefix(ArgsIn.effect, "block") {
+		outimg, err = FloodSort(rgbaimg, uint32(ArgsIn.delta), ArgsIn.rev, ArgsIn.randgroup, BOX_SHAPE)
+		if err != nil {
+			fmt.Printf("Unable to block sort due to error : %v\n", err)
+			os.Exit(1)
+		}
+	} else if strings.HasPrefix(ArgsIn.effect, "square") {
+		outimg, err = FloodSort(rgbaimg, uint32(ArgsIn.delta), ArgsIn.rev, ArgsIn.randgroup, SQUARE_SHAPE)
+		if err != nil {
+			fmt.Printf("Unable to square sort due to error : %v\n", err)
 			os.Exit(1)
 		}
 	} else if strings.HasPrefix(ArgsIn.effect, "dct") {
@@ -405,7 +430,7 @@ type pxpt struct {
 	y int
 }
 
-func FloodSort(img *image.NRGBA, delta uint32, reverse bool, randgroup bool) (*image.NRGBA, error) {
+func FloodSort(img *image.NRGBA, delta uint32, reverse, randgroup bool, shape int) (*image.NRGBA, error) {
 	if delta <= 0 {
 		return img, nil
 	}
@@ -426,12 +451,25 @@ func FloodSort(img *image.NRGBA, delta uint32, reverse bool, randgroup bool) (*i
 	var wave []pxpt = make([]pxpt, 0, w*3)
 
 	// start at min
-	//TODO start at non 0alpha
 	wave = append(wave, pxpt{bounds.Min.X, bounds.Min.Y})
 
-	prevcap := cap(wave)
+	prevcap := cap(wave) // TODO tune this? actually using the biggest is a big mistake though
 
 	debuggroupcount := 0
+
+	//var shapefunc func(startpt pxpt, group *[]pxpt, wave *[]pxpt, img *image.NRGBA, checked []bool, delta uint32)
+	var shapefunc func(pxpt, *[]pxpt, *[]pxpt, *image.NRGBA, []bool, uint32, int) = nil
+
+	switch shape {
+	case BLOB_SHAPE:
+		shapefunc = FloodBlob
+	case SQUARE_SHAPE:
+		shapefunc = FloodBox
+	case BOX_SHAPE:
+		shapefunc = FloodBox
+	default:
+		panic("Unrecognized shape for floodsort")
+	}
 
 	// have a processing wave going out, goroutines will sort flooded areas
 	for len(wave) > 0 {
@@ -443,13 +481,35 @@ func FloodSort(img *image.NRGBA, delta uint32, reverse bool, randgroup bool) (*i
 			continue
 		}
 
+		checked[(pt.x-bounds.Min.X)+((pt.y-bounds.Min.Y)*w)] = true
+
+		// if this is 0alpha, then add unchecked neighbors to the wave and continue
+		i1 := (pt.y * img.Stride) + (pt.x * 4)
+		if img.Pix[i1+3] == 0 {
+			for _, npt := range [4]pxpt{{0, 1}, {0, -1}, {1, 0}, {-1, 0}} {
+				y := pt.y + npt.y
+				x := pt.x + npt.x
+				iy := y - bounds.Min.Y
+				ix := x - bounds.Min.X
+
+				if ix < 0 || ix >= w || iy < 0 || iy >= h {
+					continue
+				}
+
+				if checked[ix+(iy*w)] {
+					continue
+				}
+
+				wave = append(wave, pxpt{x: x, y: y})
+			}
+			continue
+		}
+
 		// flood out a group
 		var group []pxpt = make([]pxpt, 0, prevcap)
 		debuggroupcount += 1
 
-		checked[(pt.x-bounds.Min.X)+((pt.y-bounds.Min.Y)*w)] = true
-
-		FloodBlob(pt, &group, &wave, img, checked, delta)
+		shapefunc(pt, &group, &wave, img, checked, delta, shape)
 
 		// sort the group in a goroutine
 		//fmt.Printf("DEBUG Start %v group for %v (wave at %v) %v/%v\n", debuggroupcount, len(group), len(wave), debugcheckcount, debugfullcheckcount)
@@ -506,7 +566,7 @@ func FloodSort(img *image.NRGBA, delta uint32, reverse bool, randgroup bool) (*i
 	return img, nil
 }
 
-func FloodBlob(startpt pxpt, group *[]pxpt, wave *[]pxpt, img *image.NRGBA, checked []bool, delta uint32) {
+func FloodBlob(startpt pxpt, group *[]pxpt, wave *[]pxpt, img *image.NRGBA, checked []bool, delta uint32, _ int) {
 	bounds := img.Bounds()
 	w := bounds.Dx()
 	h := bounds.Dy()
@@ -545,11 +605,22 @@ func FloodBlob(startpt pxpt, group *[]pxpt, wave *[]pxpt, img *image.NRGBA, chec
 			i2 := ((gpt.y + dy) * img.Stride) + (gpt.x * 4)
 			p2 := img.Pix[i2 : i2+4]
 
-			//TODO check for 0alpha
+			// if this is 0alpha add to wave
+			addtogroup := true
 
-			// check if within delta
-			pd := colorDist2(p1, p2)
-			if delta < pd {
+			if p2[3] == 0 {
+				addtogroup = false
+			}
+
+			if addtogroup {
+				// check if within delta
+				pd := colorDist2(p1, p2)
+				if delta < pd {
+					addtogroup = false
+				}
+			}
+
+			if !addtogroup {
 				// add to wave
 				*wave = append(*wave, pxpt{x: gpt.x, y: gpt.y + dy})
 			} else {
@@ -570,11 +641,22 @@ func FloodBlob(startpt pxpt, group *[]pxpt, wave *[]pxpt, img *image.NRGBA, chec
 			i2 := (gpt.y * img.Stride) + ((gpt.x + dx) * 4)
 			p2 := img.Pix[i2 : i2+4]
 
-			//TODO check for 0alpha
+			// if this is 0alpha add to wave
+			addtogroup := true
 
-			// check if within delta
-			pd := colorDist2(p1, p2)
-			if delta < pd {
+			if p2[3] == 0 {
+				addtogroup = false
+			}
+
+			if addtogroup {
+				// check if within delta
+				pd := colorDist2(p1, p2)
+				if delta < pd {
+					addtogroup = false
+				}
+			}
+
+			if !addtogroup {
 				// add to wave
 				*wave = append(*wave, pxpt{x: gpt.x + dx, y: gpt.y})
 			} else {
@@ -584,6 +666,44 @@ func FloodBlob(startpt pxpt, group *[]pxpt, wave *[]pxpt, img *image.NRGBA, chec
 			}
 		}
 	}
+}
+
+func FloodBox(startpt pxpt, group *[]pxpt, wave *[]pxpt, img *image.NRGBA, checked []bool, delta uint32, shape int) {
+	// from starting point keep expanding out until we hit something checked, 0alpha, or past delta
+	*group = append(*group, startpt)
+
+	/*bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+
+	up, down, left, right := 0, 0, 0, 0
+	blockup, blockdown, blockleft, blockright := false, false, false, false
+	for {
+		if shape == SQUARE_SHAPE && ((blockup && blockdown) || (blockleft && blockright)) {
+			break
+		}
+
+		if !blockup {
+			up += 1
+
+			y := startpt.y - up
+			for x := startpt.x - left; x <= (startpt.x + right); x++ {
+				ix := x - bounds.Min.X
+				iy := y - bounds.Min.Y
+
+				if checked[ix+(iy*w)] {
+					blockup = true
+				}
+
+				i1 := (y * img.Stride) + (x * 4)
+				p1 := img.Pix[i1 : i1+4]
+				i2 := ((y + 1) * img.Stride) + (x * 4)
+				p2 := img.Pix[i2 : i2+4]
+			}
+		}
+	}
+
+	// add all our nonchecked edges to the wave
+	*/
 }
 
 func colorSum(p []uint8) int64 {
