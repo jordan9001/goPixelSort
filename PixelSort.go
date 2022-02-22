@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"image"
+	"image/color"
 	"image/draw"
 	"image/jpeg" // register the JPG format with the image package
 	"image/png"  // register the PNG format with the image package
@@ -13,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/disintegration/imaging"
 )
 
 const (
@@ -77,6 +80,7 @@ func init() {
 	flag.IntVar(&ArgsIn.delta, "d", default_delta, usage_delta+" (shorthand)")
 	flag.BoolVar(&ArgsIn.rev, "r", false, usage_rev)
 	flag.BoolVar(&ArgsIn.randgroup, "rnd", false, usage_rand)
+	flag.IntVar(&ArgsIn.angle, "ang", default_angle, usage_angle)
 
 	flag.Float64Var(&ArgsIn.scale, "smp", default_scale, usage_scale)
 
@@ -159,19 +163,19 @@ func main() {
 
 	// do rotation
 	ArgsIn.angle = (ArgsIn.angle + 360) % 360
+	origbounds := rgbaimg.Bounds()
 	if ArgsIn.angle != 0 {
-		fmt.Println("TODO apply rotation")
-		os.Exit(1)
+		rgbaimg = imaging.Rotate(rgbaimg, float64(ArgsIn.angle), color.Transparent)
 	}
 
 	// isolate selected channel
 	var otherchans *image.NRGBA = nil
 
-	if ArgsIn.chandeg < 0 {
+	if ArgsIn.chandeg < 0 || ArgsIn.chandeg > 360 {
 		fmt.Println("Please specify a channel spread from 0 to 360")
 		os.Exit(1)
 	}
-	if ArgsIn.chandeg < 360 {
+	if ArgsIn.chandeg != 360 {
 		c, err := hex2col(ArgsIn.chanhue)
 		if err != nil {
 			fmt.Printf("Unrecognized hex color %q", ArgsIn.chanhue)
@@ -248,7 +252,13 @@ func main() {
 
 	// rotate back
 	if ArgsIn.angle != 0 {
-		//TODO
+		outimg = imaging.Rotate(rgbaimg, float64(-ArgsIn.angle), color.Transparent)
+		// cut back to original size
+		newbounds := outimg.Bounds()
+		hdx := (newbounds.Dx() - origbounds.Dx()) / 2
+		hdy := (newbounds.Dy() - origbounds.Dy()) / 2
+		bnd := origbounds.Add(image.Point{X: hdx, Y: hdy})
+		outimg = outimg.SubImage(bnd).(*image.NRGBA)
 	}
 
 	// output the image
