@@ -431,8 +431,6 @@ func FloodSort(img *image.NRGBA, delta uint32, reverse bool, randgroup bool) (*i
 
 	prevcap := cap(wave)
 
-	debugcheckcount := 0
-	debugfullcheckcount := w * h
 	debuggroupcount := 0
 
 	// have a processing wave going out, goroutines will sort flooded areas
@@ -447,85 +445,11 @@ func FloodSort(img *image.NRGBA, delta uint32, reverse bool, randgroup bool) (*i
 
 		// flood out a group
 		var group []pxpt = make([]pxpt, 0, prevcap)
-		var groupwave []pxpt = make([]pxpt, 0, prevcap)
 		debuggroupcount += 1
 
-		groupwave = append(group, pt)
 		checked[(pt.x-bounds.Min.X)+((pt.y-bounds.Min.Y)*w)] = true
-		debugcheckcount += 1
 
-		for len(groupwave) > 0 {
-			var gpt pxpt
-			gpt, groupwave = groupwave[0], groupwave[1:]
-
-			// add this to the group
-			group = append(group, gpt)
-
-			// check this is checked
-			ix := gpt.x - bounds.Min.X
-			iy := gpt.y - bounds.Min.Y
-			if !checked[ix+(iy*w)] {
-				panic("Px in groupwave that was not already checked")
-			}
-
-			i1 := (gpt.y * img.Stride) + (gpt.x * 4)
-			p1 := img.Pix[i1 : i1+4]
-
-			// if neighbors are unchecked, see if they are within delta
-			// add to group, else add to wave
-			for dy := -1; dy <= 1; dy++ {
-				if dy == 0 || iy+dy < 0 || iy+dy >= h {
-					continue
-				}
-
-				if checked[ix+((iy+dy)*w)] {
-					continue
-				}
-
-				i2 := ((gpt.y + dy) * img.Stride) + (gpt.x * 4)
-				p2 := img.Pix[i2 : i2+4]
-
-				//TODO check for 0alpha
-
-				// check if within delta
-				pd := colorDist2(p1, p2)
-				if delta < pd {
-					// add to wave
-					wave = append(wave, pxpt{x: gpt.x, y: gpt.y + dy})
-				} else {
-					// add to group and mark checked
-					groupwave = append(groupwave, pxpt{x: gpt.x, y: gpt.y + dy})
-					checked[ix+((iy+dy)*w)] = true
-					debugcheckcount += 1
-				}
-			}
-			for dx := -1; dx <= 1; dx++ {
-				if dx == 0 || ix+dx < 0 || ix+dx >= w {
-					continue
-				}
-
-				if checked[(ix+dx)+(iy*w)] {
-					continue
-				}
-
-				i2 := (gpt.y * img.Stride) + ((gpt.x + dx) * 4)
-				p2 := img.Pix[i2 : i2+4]
-
-				//TODO check for 0alpha
-
-				// check if within delta
-				pd := colorDist2(p1, p2)
-				if delta < pd {
-					// add to wave
-					wave = append(wave, pxpt{x: gpt.x + dx, y: gpt.y})
-				} else {
-					// add to group
-					groupwave = append(groupwave, pxpt{x: gpt.x + dx, y: gpt.y})
-					checked[(ix+dx)+(iy*w)] = true
-					debugcheckcount += 1
-				}
-			}
-		}
+		FloodBlob(pt, &group, &wave, img, checked, delta)
 
 		// sort the group in a goroutine
 		//fmt.Printf("DEBUG Start %v group for %v (wave at %v) %v/%v\n", debuggroupcount, len(group), len(wave), debugcheckcount, debugfullcheckcount)
@@ -576,10 +500,90 @@ func FloodSort(img *image.NRGBA, delta uint32, reverse bool, randgroup bool) (*i
 		}(group, img, reverse)
 	}
 
-	fmt.Printf("Waiting on %v sorters %v/%v\n", debuggroupcount, debugcheckcount, debugfullcheckcount)
+	fmt.Printf("Waiting on %v sorters\n", debuggroupcount)
 	wg.Wait()
 
 	return img, nil
+}
+
+func FloodBlob(startpt pxpt, group *[]pxpt, wave *[]pxpt, img *image.NRGBA, checked []bool, delta uint32) {
+	bounds := img.Bounds()
+	w := bounds.Dx()
+	h := bounds.Dy()
+
+	var groupwave []pxpt = make([]pxpt, 0, cap(*group))
+	groupwave = append(groupwave, startpt)
+
+	for len(groupwave) > 0 {
+		var gpt pxpt
+		gpt, groupwave = groupwave[0], groupwave[1:]
+
+		// add this to the group
+		*group = append(*group, gpt)
+
+		// check this is checked
+		ix := gpt.x - bounds.Min.X
+		iy := gpt.y - bounds.Min.Y
+		if !checked[ix+(iy*w)] {
+			panic("Px in groupwave that was not already checked")
+		}
+
+		i1 := (gpt.y * img.Stride) + (gpt.x * 4)
+		p1 := img.Pix[i1 : i1+4]
+
+		// if neighbors are unchecked, see if they are within delta
+		// add to group, else add to wave
+		for dy := -1; dy <= 1; dy++ {
+			if dy == 0 || iy+dy < 0 || iy+dy >= h {
+				continue
+			}
+
+			if checked[ix+((iy+dy)*w)] {
+				continue
+			}
+
+			i2 := ((gpt.y + dy) * img.Stride) + (gpt.x * 4)
+			p2 := img.Pix[i2 : i2+4]
+
+			//TODO check for 0alpha
+
+			// check if within delta
+			pd := colorDist2(p1, p2)
+			if delta < pd {
+				// add to wave
+				*wave = append(*wave, pxpt{x: gpt.x, y: gpt.y + dy})
+			} else {
+				// add to group and mark checked
+				groupwave = append(groupwave, pxpt{x: gpt.x, y: gpt.y + dy})
+				checked[ix+((iy+dy)*w)] = true
+			}
+		}
+		for dx := -1; dx <= 1; dx++ {
+			if dx == 0 || ix+dx < 0 || ix+dx >= w {
+				continue
+			}
+
+			if checked[(ix+dx)+(iy*w)] {
+				continue
+			}
+
+			i2 := (gpt.y * img.Stride) + ((gpt.x + dx) * 4)
+			p2 := img.Pix[i2 : i2+4]
+
+			//TODO check for 0alpha
+
+			// check if within delta
+			pd := colorDist2(p1, p2)
+			if delta < pd {
+				// add to wave
+				*wave = append(*wave, pxpt{x: gpt.x + dx, y: gpt.y})
+			} else {
+				// add to group
+				groupwave = append(groupwave, pxpt{x: gpt.x + dx, y: gpt.y})
+				checked[(ix+dx)+(iy*w)] = true
+			}
+		}
+	}
 }
 
 func colorSum(p []uint8) int64 {
