@@ -35,7 +35,7 @@ type ArgsIn_t struct {
 	delta     int
 	rev       bool
 	randgroup bool
-	angle     int
+	angle     float64
 	scale     float64
 	effect    string
 	chanhue   string
@@ -59,7 +59,7 @@ func init() {
 		usage_rand      string  = "randomize in sorted group"
 		default_scale   float64 = 1.0
 		usage_scale     string  = "sample every xth pixel (e.g. 1.5 will downsample to 2/3)"
-		default_angle   int     = 0
+		default_angle   float64 = 0.0
 		usage_angle     string  = "TODO"
 		default_effect  string  = "linesort"
 		usage_effect    string  = "Selected effect (linesort|blocksort|floodsort|dct)"
@@ -86,7 +86,7 @@ func init() {
 	flag.IntVar(&ArgsIn.delta, "d", default_delta, usage_delta+" (shorthand)")
 	flag.BoolVar(&ArgsIn.rev, "r", false, usage_rev)
 	flag.BoolVar(&ArgsIn.randgroup, "rnd", false, usage_rand)
-	flag.IntVar(&ArgsIn.angle, "ang", default_angle, usage_angle)
+	flag.Float64Var(&ArgsIn.angle, "ang", default_angle, usage_angle)
 
 	flag.Float64Var(&ArgsIn.scale, "smp", default_scale, usage_scale)
 
@@ -164,15 +164,14 @@ func main() {
 				copy(newimg.Pix[new_i:new_i+4], rgbaimg.Pix[old_i:old_i+4])
 			}
 		}
-		fmt.Printf("Scaled image down to %vx%v\n", nw, nh)
+		fmt.Printf("Scaled image down to %vx%v\n", int(nw), int(nh))
 		rgbaimg = newimg
 	}
 
 	// do rotation
-	ArgsIn.angle = (ArgsIn.angle + 360) % 360
 	origbounds := rgbaimg.Bounds()
 	if ArgsIn.angle != 0 {
-		rgbaimg = imaging.Rotate(rgbaimg, float64(ArgsIn.angle), color.Transparent)
+		rgbaimg = imaging.Rotate(rgbaimg, ArgsIn.angle, color.Transparent)
 	}
 
 	// isolate selected channel
@@ -188,7 +187,7 @@ func main() {
 	} else if ArgsIn.chanhue == "g" {
 		ArgsIn.chanhue = "00FF00"
 		ArgsIn.chandeg = 120
-	} else if ArgsIn.chanhue == "g" {
+	} else if ArgsIn.chanhue == "b" {
 		ArgsIn.chanhue = "0000FF"
 		ArgsIn.chandeg = 120
 	}
