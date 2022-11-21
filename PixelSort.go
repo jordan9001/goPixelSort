@@ -63,7 +63,7 @@ func init() {
 		default_angle   float64 = 0.0
 		usage_angle     string  = "TODO"
 		default_effect  string  = "linesort"
-		usage_effect    string  = "Selected effect (linesort|blocksort|floodsort|dft|idft)"
+		usage_effect    string  = "Selected effect (linesort|blocksort|floodsort|dft|idft|hdft|hidft)"
 		default_chanhue string  = "FF0000"
 		default_chandeg int     = 360
 		usage_chanhue   string  = "Hue to isolate (As hex value, eg FF0000 for reg centered channel) use (r|g|b) to automatically set deg as well"
@@ -254,20 +254,26 @@ func main() {
 			fmt.Printf("Unable to square sort due to error : %v\n", err)
 			os.Exit(1)
 		}
-	} else if strings.HasPrefix(ArgsIn.effect, "dft_mess") {
-		outimg, err = FftMess(rgbaimg)
+	} else if strings.HasPrefix(ArgsIn.effect, "hdft") {
+		outimg, err = FftHalf(rgbaimg, ArgsIn.dftsat, false)
+		if err != nil {
+			fmt.Printf("Unable to use fft due to error : %v\n", err)
+			os.Exit(1)
+		}
+	} else if strings.HasPrefix(ArgsIn.effect, "hidft") {
+		outimg, err = IFftHalf(rgbaimg, ArgsIn.dftsat, false)
 		if err != nil {
 			fmt.Printf("Unable to use fft due to error : %v\n", err)
 			os.Exit(1)
 		}
 	} else if strings.HasPrefix(ArgsIn.effect, "dft") {
-		outimg, err = FftHalf(rgbaimg, ArgsIn.dftsat)
+		outimg, err = FftHalf(rgbaimg, ArgsIn.dftsat, true)
 		if err != nil {
 			fmt.Printf("Unable to use fft due to error : %v\n", err)
 			os.Exit(1)
 		}
 	} else if strings.HasPrefix(ArgsIn.effect, "idft") {
-		outimg, err = IFftHalf(rgbaimg, ArgsIn.dftsat)
+		outimg, err = IFftHalf(rgbaimg, ArgsIn.dftsat, true)
 		if err != nil {
 			fmt.Printf("Unable to use fft due to error : %v\n", err)
 			os.Exit(1)
@@ -948,7 +954,7 @@ func FloodBox(startpt pxpt, group *[]pxpt, wave *[]pxpt, img *image.NRGBA, check
 
 }
 
-func FftHalf(img *image.NRGBA, satval float64) (*image.NRGBA, error) {
+func FftHalf(img *image.NRGBA, satval float64, twod bool) (*image.NRGBA, error) {
 	fmt.Printf("Floatizing\n")
 	// just an image in
 	r_real, g_real, b_real := floatize_chans(img, false, satval)
@@ -961,14 +967,25 @@ func FftHalf(img *image.NRGBA, satval float64) (*image.NRGBA, error) {
 	var b_cplx [][]complex128
 
 	fmt.Printf("fft r\n")
-
-	r_cplx = fft.FFT2Real(r_real)
+	if twod {
+		r_cplx = fft.FFT2Real(r_real)
+	} else {
+		r_cplx = FftOneChan(r_real)
+	}
 
 	fmt.Printf("fft g\n")
-	g_cplx = fft.FFT2Real(g_real)
+	if twod {
+		g_cplx = fft.FFT2Real(g_real)
+	} else {
+		g_cplx = FftOneChan(g_real)
+	}
 
 	fmt.Printf("fft b\n")
-	b_cplx = fft.FFT2Real(b_real)
+	if twod {
+		b_cplx = fft.FFT2Real(b_real)
+	} else {
+		b_cplx = FftOneChan(b_real)
+	}
 
 	fmt.Printf("together\n")
 	// get an image with the mag on the left and the phase on the right
@@ -977,7 +994,16 @@ func FftHalf(img *image.NRGBA, satval float64) (*image.NRGBA, error) {
 	return img, nil
 }
 
-func IFftHalf(img *image.NRGBA, satval float64) (*image.NRGBA, error) {
+func FftOneChan(real [][]float64) [][]complex128 {
+	cplx := make([][]complex128, len(real))
+	for i := 0; i < len(real); i++ {
+		cplx[i] = fft.FFTReal(real[i])
+	}
+
+	return cplx
+}
+
+func IFftHalf(img *image.NRGBA, satval float64, twod bool) (*image.NRGBA, error) {
 	fmt.Printf("Floatizing\n")
 	r_cplx, g_cplx, b_cplx := complexize_chans(img, true, satval)
 
@@ -985,13 +1011,25 @@ func IFftHalf(img *image.NRGBA, satval float64) (*image.NRGBA, error) {
 	fft.SetWorkerPoolSize(0)
 
 	fmt.Printf("ifft r\n")
-	r_cplx = fft.IFFT2(r_cplx)
+	if twod {
+		r_cplx = fft.IFFT2(r_cplx)
+	} else {
+		r_cplx = IFftOneChan(r_cplx)
+	}
 
 	fmt.Printf("ifft g\n")
-	g_cplx = fft.IFFT2(g_cplx)
+	if twod {
+		g_cplx = fft.IFFT2(g_cplx)
+	} else {
+		g_cplx = IFftOneChan(g_cplx)
+	}
 
 	fmt.Printf("ifft b\n")
-	b_cplx = fft.IFFT2(b_cplx)
+	if twod {
+		b_cplx = fft.IFFT2(b_cplx)
+	} else {
+		b_cplx = IFftOneChan(b_cplx)
+	}
 
 	fmt.Printf("together\n")
 	img = from_complex(r_cplx, g_cplx, b_cplx, false, satval, false)
@@ -999,7 +1037,16 @@ func IFftHalf(img *image.NRGBA, satval float64) (*image.NRGBA, error) {
 	return img, nil
 }
 
-func FftMess(img *image.NRGBA) (*image.NRGBA, error) {
+func IFftOneChan(in [][]complex128) [][]complex128 {
+	cplx := make([][]complex128, len(in))
+	for i := 0; i < len(in); i++ {
+		cplx[i] = fft.IFFT(in[i])
+	}
+
+	return cplx
+}
+
+func FftMess(img *image.NRGBA, drywet float64, magpix_x, magpix_y, phpix_x, phpix_y int) (*image.NRGBA, error) {
 
 	// parallelize
 	fft.SetWorkerPoolSize(0)
@@ -1020,7 +1067,13 @@ func FftMess(img *image.NRGBA) (*image.NRGBA, error) {
 	fmt.Printf("fft b\n")
 	b_cplx = fft.FFT2Real(b_real)
 
-	// TODO mess with it here!
+	//TODO
+	// my favorites have been pixilating the mag, or phase (separately)
+	// or edge detect on the mag overlayed at like 50%
+	// so, params to add here would be pixilation and edge detect modes
+	// and a dry/wet percentage for how much to let the original show through
+	// and probably an option to use 1D FFT instead of 2D
+	//TODO
 
 	fmt.Printf("ifft b\n")
 	b_cplx = fft.IFFT2(b_cplx)
@@ -1162,6 +1215,9 @@ func from_complex(r, g, b [][]complex128, logize bool, satval float64, savephase
 	ymax := len(r)
 	xmax := len(r[0])
 
+	// monitor for a better satval
+	maxabs := 0.0
+
 	// get magnitude
 	xwidth := xmax
 	if savephase {
@@ -1186,6 +1242,16 @@ func from_complex(r, g, b [][]complex128, logize bool, satval float64, savephase
 			babs := cmplx.Abs(b[y][x])
 
 			if logize {
+				if rabs > maxabs {
+					maxabs = rabs
+				}
+				if gabs > maxabs {
+					maxabs = gabs
+				}
+				if babs > maxabs {
+					maxabs = babs
+				}
+
 				// apply a logrithmic transform to be able to view it
 				// we are losing information here
 				rabs = scale_c * math.Log(1+rabs)
@@ -1235,6 +1301,10 @@ func from_complex(r, g, b [][]complex128, logize bool, satval float64, savephase
 				img.Pix[off+xm4+3] = 0xff
 			}
 		}
+	}
+
+	if logize {
+		fmt.Printf("A better dftsat would have been %v\n", maxabs)
 	}
 
 	return img
