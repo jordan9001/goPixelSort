@@ -8,6 +8,8 @@ import (
 	"image/draw"
 	"image/jpeg" // register the JPG format with the image package
 	"image/png"  // register the PNG format with the image package
+	"math"
+	"math/cmplx"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/disintegration/imaging"
+	"github.com/mjibson/go-dsp/fft"
 )
 
 const (
@@ -41,9 +44,7 @@ type ArgsIn_t struct {
 	chanhue   string
 	chandeg   int
 	chanjoin  bool
-	dcthigh   int
-	dctlow    int
-	dctblok   int
+	dftsat    float64
 }
 
 var ArgsIn ArgsIn_t
@@ -62,18 +63,14 @@ func init() {
 		default_angle   float64 = 0.0
 		usage_angle     string  = "TODO"
 		default_effect  string  = "linesort"
-		usage_effect    string  = "Selected effect (linesort|blocksort|floodsort|dct)"
+		usage_effect    string  = "Selected effect (linesort|blocksort|floodsort|dft|idft)"
 		default_chanhue string  = "FF0000"
 		default_chandeg int     = 360
 		usage_chanhue   string  = "Hue to isolate (As hex value, eg FF0000 for reg centered channel) use (r|g|b) to automatically set deg as well"
 		usage_chandeg   string  = "Size of hue to isolate (As degrees, eg 120 for just 1/3 of color space)"
 		usage_chanjoin  string  = "Don't join isolated channel after effect"
-		default_dcthigh int     = 0
-		default_dctlow  int     = 0
-		default_dctblok int     = 0x20
-		usage_dcthigh   string  = "TODO"
-		usage_dctlow    string  = "TODO"
-		usage_dctblok   string  = "TODO"
+		usage_dftsat    string  = "Value for log scaling half dft"
+		default_dftsat  float64 = 65537.0
 	)
 
 	flag.BoolVar(&ArgsIn.help, "h", false, "Prints the usage")
@@ -97,10 +94,7 @@ func init() {
 	flag.IntVar(&ArgsIn.chandeg, "cd", default_chandeg, usage_chandeg)
 	flag.BoolVar(&ArgsIn.chanjoin, "cj", false, usage_chanjoin)
 
-	flag.IntVar(&ArgsIn.dcthigh, "dh", default_dcthigh, usage_dcthigh)
-	flag.IntVar(&ArgsIn.dctlow, "dl", default_dctlow, usage_dctlow)
-	flag.IntVar(&ArgsIn.dctblok, "db", default_dctblok, usage_dctblok)
-
+	flag.Float64Var(&ArgsIn.dftsat, "dftsat", default_dftsat, usage_dftsat)
 }
 
 func main() {
@@ -260,17 +254,31 @@ func main() {
 			fmt.Printf("Unable to square sort due to error : %v\n", err)
 			os.Exit(1)
 		}
-	} else if strings.HasPrefix(ArgsIn.effect, "dct") {
-		//TODO
-		fmt.Println("TODO dct effect")
-		os.Exit(1)
+	} else if strings.HasPrefix(ArgsIn.effect, "dft_mess") {
+		outimg, err = FftMess(rgbaimg)
+		if err != nil {
+			fmt.Printf("Unable to use fft due to error : %v\n", err)
+			os.Exit(1)
+		}
+	} else if strings.HasPrefix(ArgsIn.effect, "dft") {
+		outimg, err = FftHalf(rgbaimg, ArgsIn.dftsat)
+		if err != nil {
+			fmt.Printf("Unable to use fft due to error : %v\n", err)
+			os.Exit(1)
+		}
+	} else if strings.HasPrefix(ArgsIn.effect, "idft") {
+		outimg, err = IFftHalf(rgbaimg, ArgsIn.dftsat)
+		if err != nil {
+			fmt.Printf("Unable to use fft due to error : %v\n", err)
+			os.Exit(1)
+		}
 	} else {
 		fmt.Printf("Unknown effect %v\n", ArgsIn.effect)
 		os.Exit(1)
 	}
 
 	if otherchans != nil && !ArgsIn.chanjoin {
-		//TODO join back with the other channels
+		// join back with the other channels
 		outimg = addImages(outimg, otherchans)
 	}
 
@@ -910,6 +918,7 @@ func FloodBox(startpt pxpt, group *[]pxpt, wave *[]pxpt, img *image.NRGBA, check
 			}
 		}
 	}
+
 	//left & right
 	for y := startpt.y - (up + 1); y <= (startpt.y + (down + 1)); y++ {
 		if y < bounds.Min.Y || y >= bounds.Max.Y {
@@ -937,6 +946,300 @@ func FloodBox(startpt pxpt, group *[]pxpt, wave *[]pxpt, img *image.NRGBA, check
 		}
 	}
 
+}
+
+func FftHalf(img *image.NRGBA, satval float64) (*image.NRGBA, error) {
+	fmt.Printf("Floatizing\n")
+	// just an image in
+	r_real, g_real, b_real := floatize_chans(img, false, satval)
+
+	// parallelize
+	fft.SetWorkerPoolSize(0)
+
+	var r_cplx [][]complex128
+	var g_cplx [][]complex128
+	var b_cplx [][]complex128
+
+	fmt.Printf("fft r\n")
+
+	r_cplx = fft.FFT2Real(r_real)
+
+	fmt.Printf("fft g\n")
+	g_cplx = fft.FFT2Real(g_real)
+
+	fmt.Printf("fft b\n")
+	b_cplx = fft.FFT2Real(b_real)
+
+	fmt.Printf("together\n")
+	fmt.Printf("DBG: %v %v %v\n", r_cplx[32][32], g_cplx[32][32], b_cplx[32][32])
+	// get an image with the mag on the left and the phase on the right
+	img = from_complex(r_cplx, g_cplx, b_cplx, true, satval, true)
+
+	return img, nil
+}
+
+func IFftHalf(img *image.NRGBA, satval float64) (*image.NRGBA, error) {
+	fmt.Printf("Floatizing\n")
+	r_cplx, g_cplx, b_cplx := complexize_chans(img, true, satval)
+
+	fmt.Printf("DBG: %v %v %v\n", r_cplx[32][32], g_cplx[32][32], b_cplx[32][32])
+	// parallelize
+	fft.SetWorkerPoolSize(0)
+
+	fmt.Printf("ifft r\n")
+	r_cplx = fft.IFFT2(r_cplx)
+
+	fmt.Printf("ifft g\n")
+	g_cplx = fft.IFFT2(g_cplx)
+
+	fmt.Printf("ifft b\n")
+	b_cplx = fft.IFFT2(b_cplx)
+
+	fmt.Printf("together\n")
+	img = from_complex(r_cplx, g_cplx, b_cplx, false, satval, false)
+
+	return img, nil
+}
+
+func FftMess(img *image.NRGBA) (*image.NRGBA, error) {
+
+	// parallelize
+	fft.SetWorkerPoolSize(0)
+
+	fmt.Printf("Floatizing\n")
+	r_real, g_real, b_real := floatize_chans(img, false, 0)
+
+	var r_cplx [][]complex128
+	var g_cplx [][]complex128
+	var b_cplx [][]complex128
+
+	fmt.Printf("fft r\n")
+	r_cplx = fft.FFT2Real(r_real)
+
+	fmt.Printf("fft g\n")
+	g_cplx = fft.FFT2Real(g_real)
+
+	fmt.Printf("fft b\n")
+	b_cplx = fft.FFT2Real(b_real)
+
+	// TODO mess with it here!
+
+	fmt.Printf("ifft b\n")
+	b_cplx = fft.IFFT2(b_cplx)
+
+	fmt.Printf("ifft g\n")
+	g_cplx = fft.IFFT2(g_cplx)
+
+	fmt.Printf("ifft r\n")
+	r_cplx = fft.IFFT2(r_cplx)
+
+	img = from_complex(r_cplx, g_cplx, b_cplx, false, 0, false)
+
+	return img, nil
+}
+
+func floatize_chans(img *image.NRGBA, unlog bool, satval float64) (r, g, b [][]float64) {
+	ymin := img.Rect.Min.Y
+	ymax := img.Rect.Max.Y
+	xmin := img.Rect.Min.X
+	xmax := img.Rect.Max.X
+
+	r = make([][]float64, ymax-ymin)
+	g = make([][]float64, ymax-ymin)
+	b = make([][]float64, ymax-ymin)
+	for i := 0; i < (ymax - ymin); i++ {
+		r[i] = make([]float64, xmax-xmin)
+		g[i] = make([]float64, xmax-xmin)
+		b[i] = make([]float64, xmax-xmin)
+	}
+
+	stride := img.Stride
+
+	scale_c := 255.0 / math.Log(1+satval)
+
+	for y := ymin; y < ymax; y++ {
+		y_base := y - ymin
+		yoff := y_base * stride
+		for x := xmin; x < xmax; x++ {
+			x_base := (x - xmin)
+			off := yoff + (x_base * 4)
+
+			rf := float64(img.Pix[off+0])
+			gf := float64(img.Pix[off+1])
+			bf := float64(img.Pix[off+2])
+
+			if unlog {
+				// apply a inverst logrithmic transform
+				// logged = c ln(1 + v)
+				// v = e^(logged/c) - 1
+				rf = math.Exp(rf/scale_c) - 1
+				gf = math.Exp(gf/scale_c) - 1
+				bf = math.Exp(bf/scale_c) - 1
+			} else {
+				// just scale down to 1
+				rf = rf / 255.0
+				gf = gf / 255.0
+				bf = bf / 255.0
+			}
+
+			r[y_base][x_base] = rf
+			g[y_base][x_base] = gf
+			b[y_base][x_base] = bf
+		}
+	}
+
+	return r, g, b
+}
+
+func complexize_chans(img *image.NRGBA, unlog bool, satval float64) (r, g, b [][]complex128) {
+	// assumes right half of image is the phase info
+	ymin := img.Rect.Min.Y
+	ymax := img.Rect.Max.Y
+	xmin := img.Rect.Min.X
+	dx := img.Rect.Dx() / 2
+	dx4 := dx * 4
+	xmax := dx + xmin
+
+	r = make([][]complex128, ymax-ymin)
+	g = make([][]complex128, ymax-ymin)
+	b = make([][]complex128, ymax-ymin)
+	for i := 0; i < (ymax - ymin); i++ {
+		r[i] = make([]complex128, xmax-xmin)
+		g[i] = make([]complex128, xmax-xmin)
+		b[i] = make([]complex128, xmax-xmin)
+	}
+
+	stride := img.Stride
+
+	scale_c := 255.0 / math.Log(1+satval)
+
+	phase_map := (2 * math.Pi) / 255.0
+
+	for y := ymin; y < ymax; y++ {
+		y_base := y - ymin
+		yoff := y_base * stride
+		for x := xmin; x < xmax; x++ {
+			x_base := (x - xmin)
+			off := yoff + (x_base * 4)
+
+			rf := float64(img.Pix[off+0])
+			gf := float64(img.Pix[off+1])
+			bf := float64(img.Pix[off+2])
+
+			if unlog {
+				// apply a inverst logrithmic transform
+				// logged = c ln(1 + v)
+				// v = e^(logged/c) - 1
+				rf = math.Exp(rf/scale_c) - 1
+				gf = math.Exp(gf/scale_c) - 1
+				bf = math.Exp(bf/scale_c) - 1
+			} else {
+				// just scale down to 1
+				rf = rf / 255.0
+				gf = gf / 255.0
+				bf = bf / 255.0
+			}
+
+			rp := float64(img.Pix[off+dx4+0])
+			gp := float64(img.Pix[off+dx4+1])
+			bp := float64(img.Pix[off+dx4+2])
+
+			// map back to between -pi and pi
+			rp = (rp * phase_map) - math.Pi
+			gp = (gp * phase_map) - math.Pi
+			bp = (bp * phase_map) - math.Pi
+
+			// z = |z|(cos(p) + isin(p))
+			r[y_base][x_base] = complex(rf*math.Cos(rp), rf*math.Sin(rp))
+			g[y_base][x_base] = complex(gf*math.Cos(gp), gf*math.Sin(gp))
+			b[y_base][x_base] = complex(bf*math.Cos(bp), bf*math.Sin(bp))
+		}
+	}
+
+	return r, g, b
+
+}
+
+func from_complex(r, g, b [][]complex128, logize bool, satval float64, savephase bool) *image.NRGBA {
+	ymax := len(r)
+	xmax := len(r[0])
+
+	// get magnitude
+	xwidth := xmax
+	if savephase {
+		xwidth = xmax * 2
+	}
+
+	img := image.NewNRGBA(image.Rectangle{Min: image.Point{0, 0}, Max: image.Point{xwidth, ymax}})
+	stride := img.Stride
+
+	scale_c := 255.0 / math.Log(1+satval)
+
+	phase_map := 255.0 / (2 * math.Pi)
+	xm4 := xmax * 4
+
+	for y := 0; y < ymax; y++ {
+		yoff := y * stride
+		for x := 0; x < xmax; x++ {
+			off := yoff + (x * 4)
+
+			rabs := cmplx.Abs(r[y][x])
+			gabs := cmplx.Abs(g[y][x])
+			babs := cmplx.Abs(b[y][x])
+
+			if logize {
+				// apply a logrithmic transform to be able to view it
+				// we are losing information here
+				rabs = scale_c * math.Log(1+rabs)
+				gabs = scale_c * math.Log(1+gabs)
+				babs = scale_c * math.Log(1+babs)
+			} else {
+				// just scale 1 to 256
+				rabs *= 255.0
+				gabs *= 255.0
+				babs *= 255.0
+			}
+
+			if rabs > 255 {
+				rabs = 255
+			} else if rabs < 0 {
+				rabs = 0
+			}
+			if gabs > 255 {
+				gabs = 255
+			} else if gabs < 0 {
+				gabs = 0
+			}
+			if babs > 255 {
+				babs = 255
+			} else if babs < 0 {
+				babs = 0
+			}
+
+			img.Pix[off+0] = byte(rabs)
+			img.Pix[off+1] = byte(gabs)
+			img.Pix[off+2] = byte(babs)
+			img.Pix[off+3] = 0xff
+
+			if savephase {
+				rp := cmplx.Phase(r[y][x])
+				gp := cmplx.Phase(g[y][x])
+				bp := cmplx.Phase(b[y][x])
+
+				// map -pi to pi onto 0 to 255
+				rp = (rp + math.Pi) * phase_map
+				gp = (gp + math.Pi) * phase_map
+				bp = (bp + math.Pi) * phase_map
+
+				img.Pix[off+xm4+0] = byte(rp)
+				img.Pix[off+xm4+1] = byte(gp)
+				img.Pix[off+xm4+2] = byte(bp)
+				img.Pix[off+xm4+3] = 0xff
+			}
+		}
+	}
+
+	return img
 }
 
 func colorSum(p []uint8) int64 {
