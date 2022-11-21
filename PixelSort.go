@@ -971,7 +971,6 @@ func FftHalf(img *image.NRGBA, satval float64) (*image.NRGBA, error) {
 	b_cplx = fft.FFT2Real(b_real)
 
 	fmt.Printf("together\n")
-	fmt.Printf("DBG: %v %v %v\n", r_cplx[32][32], g_cplx[32][32], b_cplx[32][32])
 	// get an image with the mag on the left and the phase on the right
 	img = from_complex(r_cplx, g_cplx, b_cplx, true, satval, true)
 
@@ -982,7 +981,6 @@ func IFftHalf(img *image.NRGBA, satval float64) (*image.NRGBA, error) {
 	fmt.Printf("Floatizing\n")
 	r_cplx, g_cplx, b_cplx := complexize_chans(img, true, satval)
 
-	fmt.Printf("DBG: %v %v %v\n", r_cplx[32][32], g_cplx[32][32], b_cplx[32][32])
 	// parallelize
 	fft.SetWorkerPoolSize(0)
 
