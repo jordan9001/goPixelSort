@@ -61,12 +61,12 @@ func init() {
 		default_scale   float64 = 1.0
 		usage_scale     string  = "sample every xth pixel (e.g. 1.5 will downsample to 2/3)"
 		default_angle   float64 = 0.0
-		usage_angle     string  = "TODO"
+		usage_angle     string  = "Angle for the applied the effect"
 		default_effect  string  = "linesort"
 		usage_effect    string  = "Selected effect (linesort|blocksort|floodsort|dft|idft|hdft|hidft)"
 		default_chanhue string  = "FF0000"
 		default_chandeg int     = 360
-		usage_chanhue   string  = "Hue to isolate (As hex value, eg FF0000 for reg centered channel) use (r|g|b) to automatically set deg as well"
+		usage_chanhue   string  = "Hue to isolate. Use (r|g|b), sets deg automatically"
 		usage_chandeg   string  = "Size of hue to isolate (As degrees, eg 120 for just 1/3 of color space)"
 		usage_chanjoin  string  = "Don't join isolated channel after effect"
 		usage_dftsat    string  = "Value for log scaling half dft"
@@ -95,6 +95,8 @@ func init() {
 	flag.BoolVar(&ArgsIn.chanjoin, "cj", false, usage_chanjoin)
 
 	flag.Float64Var(&ArgsIn.dftsat, "dftsat", default_dftsat, usage_dftsat)
+	//TODO add a delta mask input option
+	//TODO add a dry/wet percentage option
 }
 
 func main() {
@@ -1070,9 +1072,11 @@ func FftMess(img *image.NRGBA, drywet float64, magpix_x, magpix_y, phpix_x, phpi
 	//TODO
 	// my favorites have been pixilating the mag, or phase (separately)
 	// or edge detect on the mag overlayed at like 50%
+	// or swapping phase with a similar but changed image
 	// so, params to add here would be pixilation and edge detect modes
 	// and a dry/wet percentage for how much to let the original show through
 	// and probably an option to use 1D FFT instead of 2D
+	// use delta and delta mask to control amount
 	//TODO
 
 	fmt.Printf("ifft b\n")
